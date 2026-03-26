@@ -1,0 +1,31 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 655a40447018b384886036039efbe124, type: 3}
+  m_Name: SpellBook_assembly
+  m_EditorClassIdentifier: Assembly-CSharp::SpellBook
+  extraContext: "\u4F60\u53EF\u4EE5\u7528\u591A\u4E2A\u7279\u5F81\u8BCD\u6765\u7EC4\u5408\u6210\u4E3A\u4E00\u4E2A\u9B54\u6CD5\u3002\u6BCF\u4E2A\u7279\u5F81\u8BCD\u5728\u9B54\u6CD5\u91CC\u9762\u53EA\u80FD\u51FA\u73B0\u4E00\u6B21\u3002"
+  spellEntries:
+  - triggerWord: $tripo
+    condition: "\u8FD9\u4E2A\u9B54\u6CD5\u4F1A\u5206\u53C9\u6210\u4E09\u4E2A"
+    spellName: fly
+  - triggerWord: $ice
+    condition: "\u8FD9\u662F\u4E00\u4E2A\u51B0\u5C5E\u6027\u9B54\u6CD5"
+    spellName: fly
+  - triggerWord: $fire
+    condition: "\u8FD9\u662F\u4E00\u4E2A\u706B\u5C5E\u6027\u9B54\u6CD5"
+    spellName: fly
+  - triggerWord: $ball
+    condition: "\u5982\u679C\u8FD9\u662F\u4E00\u4E2A\u7F13\u6162\u98DE\u884C\u7684\u7403\u578B\u9B54\u6CD5"
+    spellName: fly
+  - triggerWord: $arrow
+    condition: "\u5982\u679C\u8FD9\u662F\u4E00\u4E2A\u5FEB\u901F\u98DE\u884C\u7684\u7BAD\u578B\u9B54\u6CD5"
+    spellName: fly

@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: b71b44dedeaa2804abd20caae8edfdc7
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 90832
+  packageName: Open WAV Parser
+  packageVersion: 1.7
+  assetPath: Assets/eToile/OpenWavParser/Open WAV Parser documentation 1.7.pdf
+  uploadId: 713669

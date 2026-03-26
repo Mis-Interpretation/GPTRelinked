@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 655a40447018b384886036039efbe124, type: 3}
+  m_Name: SpellBook_default
+  m_EditorClassIdentifier: Assembly-CSharp::SpellBook
+  extraContext: 
+  spellEntries:
+  - triggerWord: $sleep
+    condition: "\u4F60\u51B3\u5B9A\u7761\u61D2\u89C9"
+    spellName: fly
+  - triggerWord: $chore
+    condition: "\u4F60\u88AB\u6211\u8BF4\u670D\u53BB\u505A\u5BB6\u52A1"
+    spellName: fly
+  - triggerWord: $fly
+    condition: "\u6211\u63D0\u8BAE\u8FDB\u5165\u98DE\u884C\u6A21\u5F0F"
+    spellName: fly
+  - triggerWord: $land
+    condition: "\u6211\u63D0\u8BAE\u843D\u5730"
+    spellName: fly

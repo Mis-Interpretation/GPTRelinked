@@ -1,0 +1,14 @@
+Open WAV Parser
+
+V1.0:
+- First release.
+
+V 1.4:
+- New method to check if a file is a compatible WAV.
+- New method to combine AudioClips into a new AudioClip.
+
+V 1.6:
+- New mthods to convert AudioClip from mono to stereo and back.
+
+V 1.7:
+- Main class included in the eToile namespace.

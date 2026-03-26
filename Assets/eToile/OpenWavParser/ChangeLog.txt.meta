@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 2b6ce6ebb4fff414c9d347c7821184df
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 90832
+  packageName: Open WAV Parser
+  packageVersion: 1.7
+  assetPath: Assets/eToile/OpenWavParser/ChangeLog.txt
+  uploadId: 713669

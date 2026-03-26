@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 7728a9d2545b2d24d822525976ed4333, type: 3}
+  m_Name: MonsterData_Player
+  m_EditorClassIdentifier: Assembly-CSharp::MonsterData
+  monsterName: Happy Penguin
+  description: A penguin that will get weak if anybody say bad words about him
+  primaryType: 0
+  secondaryType: 0
+  hasSecondaryType: 0
+  frontSprite: {fileID: -407815817, guid: 618bd699e685db24798a5a81fa48a3ed, type: 3}
+  backSprite: {fileID: 399863594, guid: 618bd699e685db24798a5a81fa48a3ed, type: 3}
+  baseStats:
+    hp: 10
+    attack: 1
+    defense: 0
+    spAttack: 2
+    spDefense: 1
+    speed: 1
+  learnableMoves:
+  - move: {fileID: 11400000, guid: e1b812679a03a6e4e958e4fe0612e625, type: 2}
+    levelRequired: 0
+  - move: {fileID: 11400000, guid: 5d4ff1baf1f8c5d48b0c9344e899e04a, type: 2}
+    levelRequired: 0
+  baseExpYield: 64
+  catchRate: 45
