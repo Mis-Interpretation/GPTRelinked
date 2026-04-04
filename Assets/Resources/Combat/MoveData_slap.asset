@@ -23,3 +23,4 @@ MonoBehaviour:
   statusChance: 0
   statStageChanges: []
   targetsUser: 0
+  catchRateModifier: -10

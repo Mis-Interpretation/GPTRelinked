@@ -37,6 +37,11 @@ public class BattleUI : MonoBehaviour
     [SerializeField] private TMP_InputField chatInputField;
     [SerializeField] private Button chatSendButton;
     [SerializeField] private Button chatBackButton;
+
+    [Header("End Panel")]
+    [SerializeField] private GameObject endPanel;
+    [SerializeField] private TextMeshProUGUI endMessageText;
+    [SerializeField] private Button restartButton;
     #endregion
 
     #region Events
@@ -46,8 +51,10 @@ public class BattleUI : MonoBehaviour
     public event Action OnSwitchSelected;
     public event Action OnCatchSelected;
     public event Action<int> OnPartyMemberSelected;
-    public event Action<string> OnChatSubmitted;
+    // Passes parsed message (for logic) and raw message (for display)
+    public event Action<string, string> OnChatSubmitted;
     public event Action OnBackToActions;
+    public event Action OnRestartSelected;
     #endregion
 
     #region Public Functions
@@ -67,6 +74,9 @@ public class BattleUI : MonoBehaviour
 
         chatSendButton.onClick.AddListener(SubmitChat);
         chatBackButton.onClick.AddListener(() => OnBackToActions?.Invoke());
+
+        if (restartButton != null)
+            restartButton.onClick.AddListener(() => OnRestartSelected?.Invoke());
 
         HideAllPanels();
     }
@@ -108,7 +118,7 @@ public class BattleUI : MonoBehaviour
             if (party[i] == null) continue;
 
             PartyButtonUI btn = Instantiate(partyButtonPrefab, partyButtonContainer);
-            string displayName = $"{party[i].Data.MonsterName} Lv{party[i].Level} HP:{party[i].CurrentHp}/{party[i].MaxHp}";
+            string displayName = $"{party[i].Data.MonsterName} HP:{party[i].CurrentHp}/{party[i].MaxHp}";
             btn.Setup(displayName, i != currentIndex && !party[i].IsFainted);
 
             int index = i;
@@ -130,6 +140,18 @@ public class BattleUI : MonoBehaviour
         movePanel.SetActive(false);
         partyPanel.SetActive(false);
         chatPanel.SetActive(false);
+        if (endPanel != null) endPanel.SetActive(false);
+    }
+
+    public void ShowEndPanel(bool playerWon, string message)
+    {
+        HideAllPanels();
+        if (endPanel != null)
+        {
+            endPanel.SetActive(true);
+            if (endMessageText != null)
+                endMessageText.text = message;
+        }
     }
 
     public void UpdateEnemyIntent(string moveName)
@@ -146,9 +168,14 @@ public class BattleUI : MonoBehaviour
     #region Private Functions
     private void SubmitChat()
     {
-        string message = chatInputField.text;
-        if (string.IsNullOrWhiteSpace(message)) return;
-        OnChatSubmitted?.Invoke(message);
+        string rawMessage = chatInputField.text;
+        if (string.IsNullOrWhiteSpace(rawMessage)) return;
+        
+        string parsedMessage = PlayerEmojiParser.ParseEmojisToText(rawMessage);
+        Debug.Log($"Player message: {parsedMessage}");
+        
+        // Pass both the parsed message (for logic) and raw message (for display)
+        OnChatSubmitted?.Invoke(parsedMessage, rawMessage);
     }
 
     private void ClearContainer(Transform container)

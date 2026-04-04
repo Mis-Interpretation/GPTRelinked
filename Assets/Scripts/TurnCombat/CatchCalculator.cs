@@ -8,40 +8,66 @@ public struct CatchResult
 
 public static class CatchCalculator
 {
-    public static CatchResult TryCatch(Monster target)
+    public static float GetCatchProbability(Monster target, float chatBonus = 0f)
     {
-        float hpRatio = (float)target.CurrentHp / target.MaxHp;
-        float catchRate = target.Data.CatchRate;
+        MonsterData data = target.Data;
+        float catchRate = data.CatchRate;
 
-        // Lower HP = easier to catch
-        float modifiedRate = (3f * target.MaxHp - 2f * target.CurrentHp) * catchRate / (3f * target.MaxHp);
-
-        // Status bonus
-        float statusBonus = target.Status switch
+        float statusMultiplier = target.Status switch
         {
-            StatusCondition.Sleep => 2.5f,
-            StatusCondition.Freeze => 2.5f,
-            StatusCondition.Paralysis => 1.5f,
-            StatusCondition.Poison => 1.5f,
-            StatusCondition.Burn => 1.5f,
+            StatusCondition.Sleep    => data.SleepCatchMultiplier,
+            StatusCondition.Freeze   => data.FreezeCatchMultiplier,
+            StatusCondition.Paralysis => data.ParalysisCatchMultiplier,
+            StatusCondition.Poison   => data.PoisonCatchMultiplier,
+            StatusCondition.Burn     => data.BurnCatchMultiplier,
             _ => 1f
         };
-        modifiedRate *= statusBonus;
+
+        float clampedBonus = Mathf.Clamp(chatBonus, data.ChatCatchBonusMin, data.ChatCatchBonusMax);
+        float modifiedRate = (catchRate + clampedBonus) * statusMultiplier;
+
+        // Using modifiedRate as a direct percentage (out of 100)
+        return Mathf.Clamp01(modifiedRate / 100f);
+    }
+
+    public static CatchResult TryCatch(Monster target, float chatBonus = 0f)
+    {
+        MonsterData data = target.Data;
+        float catchRate = data.CatchRate;
+
+        float statusMultiplier = target.Status switch
+        {
+            StatusCondition.Sleep    => data.SleepCatchMultiplier,
+            StatusCondition.Freeze   => data.FreezeCatchMultiplier,
+            StatusCondition.Paralysis => data.ParalysisCatchMultiplier,
+            StatusCondition.Poison   => data.PoisonCatchMultiplier,
+            StatusCondition.Burn     => data.BurnCatchMultiplier,
+            _ => 1f
+        };
+
+        float clampedBonus = Mathf.Clamp(chatBonus, data.ChatCatchBonusMin, data.ChatCatchBonusMax);
+        float modifiedRate = (catchRate + clampedBonus) * statusMultiplier;
+
+        int requiredShakes = data.RequiredShakes;
+        float finalProbability = Mathf.Clamp01(modifiedRate / 100f);
+        
+        Debug.LogWarning($"[Catch] modifiedRate: {modifiedRate} (base: {catchRate}, chatBonus: {chatBonus}, clamped: {clampedBonus}, statusMul: {statusMultiplier}, shakes: {requiredShakes}) -> Final Prob: {finalProbability:P}");
 
         var result = new CatchResult();
 
-        if (modifiedRate >= 255f)
+        if (finalProbability >= 1f)
         {
             result.success = true;
-            result.shakeCount = 3;
+            result.shakeCount = requiredShakes;
             return result;
         }
 
-        // Shake check probability
-        float shakeProbability = modifiedRate / 255f;
+        // To make the overall success exactly `finalProbability`, 
+        // each independent shake must have probability `finalProbability^(1/shakes)`
+        float shakeProbability = finalProbability > 0f ? Mathf.Pow(finalProbability, 1f / requiredShakes) : 0f;
 
         result.shakeCount = 0;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < requiredShakes; i++)
         {
             if (Random.value <= shakeProbability)
                 result.shakeCount++;
@@ -49,7 +75,7 @@ public static class CatchCalculator
                 break;
         }
 
-        result.success = result.shakeCount >= 3;
+        result.success = result.shakeCount >= requiredShakes;
         return result;
     }
 }

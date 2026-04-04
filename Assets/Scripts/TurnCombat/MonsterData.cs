@@ -14,7 +14,19 @@ public class MonsterData : ScriptableObject
     [SerializeField] private BaseStats baseStats;
     [SerializeField] private LearnableMove[] learnableMoves;
     [SerializeField] private int baseExpYield = 64;
+    [Header("Catch Settings")]
     [SerializeField, Range(1, 255)] private int catchRate = 45;
+    [SerializeField] private float chatCatchBonusMax = 250f;
+    [SerializeField] private float chatCatchBonusMin = -50f;
+    [SerializeField, Range(1, 5)] private int requiredShakes = 3;
+
+    [Header("Status Condition Catch Multipliers")]
+    [SerializeField] private float sleepCatchMultiplier = 2.5f;
+    [SerializeField] private float freezeCatchMultiplier = 2.5f;
+    [SerializeField] private float paralysisCatchMultiplier = 1.5f;
+    [SerializeField] private float poisonCatchMultiplier = 1.5f;
+    [SerializeField] private float burnCatchMultiplier = 1.5f;
+
     [SerializeField, TextArea(2, 4)] private string personality;
     #endregion
 
@@ -31,6 +43,14 @@ public class MonsterData : ScriptableObject
     public LearnableMove[] LearnableMoves => learnableMoves;
     public int BaseExpYield => baseExpYield;
     public int CatchRate => catchRate;
+    public float ChatCatchBonusMax => chatCatchBonusMax;
+    public float ChatCatchBonusMin => chatCatchBonusMin;
+    public int RequiredShakes => requiredShakes;
+    public float SleepCatchMultiplier => sleepCatchMultiplier;
+    public float FreezeCatchMultiplier => freezeCatchMultiplier;
+    public float ParalysisCatchMultiplier => paralysisCatchMultiplier;
+    public float PoisonCatchMultiplier => poisonCatchMultiplier;
+    public float BurnCatchMultiplier => burnCatchMultiplier;
 
     public int GetExpForLevel(int level)
     {

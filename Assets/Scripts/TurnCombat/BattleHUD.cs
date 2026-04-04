@@ -7,12 +7,12 @@ public class BattleHUD : MonoBehaviour
 {
     #region Editor (Serialized)
     [SerializeField] private TextMeshProUGUI nameText;
-    [SerializeField] private TextMeshProUGUI levelText;
     [SerializeField] private TextMeshProUGUI hpText;
     [SerializeField] private Slider hpBar;
     [SerializeField] private Slider expBar;
     [SerializeField] private TextMeshProUGUI statusText;
     [SerializeField] private TextMeshProUGUI intentText;
+    [SerializeField] private TextMeshProUGUI catchRateText; // Optional
     [SerializeField] private float hpAnimSpeed = 2f;
     #endregion
 
@@ -25,7 +25,6 @@ public class BattleHUD : MonoBehaviour
     {
         this.monster = monster;
         nameText.text = monster.Data.MonsterName;
-        levelText.text = "Lv" + monster.Level;
         hpBar.maxValue = monster.MaxHp;
         hpBar.value = monster.CurrentHp;
         UpdateHPText();
@@ -67,17 +66,42 @@ public class BattleHUD : MonoBehaviour
         expBar.value = Mathf.Clamp01(normalized);
     }
 
+    public void UpdateCatchRate(float probability)
+    {
+        if (catchRateText == null && nameText != null)
+        {
+            var go = new GameObject("CatchRateText");
+            go.transform.SetParent(nameText.transform.parent, false);
+            catchRateText = go.AddComponent<TextMeshProUGUI>();
+            catchRateText.font = nameText.font;
+            catchRateText.fontSize = nameText.fontSize * 0.8f;
+            catchRateText.color = nameText.color;
+            catchRateText.alignment = TextAlignmentOptions.Right;
+            var rect = catchRateText.rectTransform;
+            rect.anchorMin = new Vector2(1, 1);
+            rect.anchorMax = new Vector2(1, 1);
+            rect.pivot = new Vector2(1, 1);
+            rect.anchoredPosition = new Vector2(0, -30);
+            rect.sizeDelta = new Vector2(200, 30);
+        }
+        
+        if (catchRateText != null)
+        {
+            catchRateText.text = $"Catch: {probability:P0}";
+            catchRateText.gameObject.SetActive(true);
+        }
+    }
+
     public void RefreshLevel()
     {
         if (monster == null) return;
-        levelText.text = "Lv" + monster.Level;
         hpBar.maxValue = monster.MaxHp;
     }
 
     public void SetIntent(string moveName)
     {
         if (intentText == null) return;
-        intentText.text = moveName == null ? "意图：思考中..." : $"意图：{moveName}";
+        intentText.text = moveName == null ? "Intent: Thinking..." : $"Intent: {moveName}";
         intentText.gameObject.SetActive(true);
     }
 

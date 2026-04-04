@@ -15,6 +15,7 @@ public class MoveData : ScriptableObject
     [SerializeField, Range(0, 100)] private int statusChance;
     [SerializeField] private StatStageChange[] statStageChanges;
     [SerializeField] private bool targetsUser;
+    [SerializeField] private float catchRateModifier;
     #endregion
 
     #region Public Functions
@@ -29,6 +30,7 @@ public class MoveData : ScriptableObject
     public int StatusChance => statusChance;
     public StatStageChange[] StatStageChanges => statStageChanges;
     public bool TargetsUser => targetsUser;
+    public float CatchRateModifier => catchRateModifier;
     #endregion
 }
 

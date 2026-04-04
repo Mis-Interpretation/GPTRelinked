@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7728a9d2545b2d24d822525976ed4333, type: 3}
   m_Name: MonsterData_Player
   m_EditorClassIdentifier: Assembly-CSharp::MonsterData
-  monsterName: Happy Penguin
+  monsterName: Rookie
   description: A penguin that will get weak if anybody say bad words about him
   primaryType: 0
   secondaryType: 0
@@ -33,3 +33,4 @@ MonoBehaviour:
     levelRequired: 0
   baseExpYield: 64
   catchRate: 45
+  personality: 

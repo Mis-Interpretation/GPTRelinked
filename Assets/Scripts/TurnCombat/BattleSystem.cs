@@ -3,6 +3,12 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>
+/// Thin MonoBehaviour orchestrator.
+/// Owns the Unity lifecycle, coroutine execution, and UI event routing.
+/// All data lives in BattleSessionData; rules in BattleRules;
+/// move logic in BattleMoveExecutor; AI in BattleAIController.
+/// </summary>
 public class BattleSystem : MonoBehaviour
 {
     #region Editor (Serialized)
@@ -13,67 +19,60 @@ public class BattleSystem : MonoBehaviour
     [SerializeField] private TypeChart typeChart;
     #endregion
 
-    #region Private Variables
-    private BattleState state;
-    private Monster[] playerParty;
-    private int currentMonsterIndex;
-    private Monster enemyMonster;
-    private bool hasChatThisTurn;
-    private string chatMessageThisTurn;
-    private int pendingEnemyMoveIndex;
-    private bool waitingForLLM;
-    private int intentMoveIndex = -1;
-    private bool intentReady;
-    #endregion
+    private BattleSessionData session;
+    private BattleMoveExecutor moveExecutor;
+    private BattleAIController aiController;
 
-    #region Events
     public event Action<bool> OnBattleOver;
-    #endregion
 
-    #region Public Functions
+    // ── Public API ──
+
     public void StartBattle(Monster[] party, Monster enemy)
     {
-        playerParty = party;
-        enemyMonster = enemy;
-        currentMonsterIndex = FindFirstAliveIndex();
+        session = new BattleSessionData
+        {
+            PlayerParty = party,
+            EnemyMonster = enemy
+        };
+        session.CurrentMonsterIndex = session.FindFirstAliveIndex();
+
+        moveExecutor = new BattleMoveExecutor(ui, typeChart);
+        aiController = new BattleAIController(llmBrain, session, ui);
 
         if (llmBrain != null)
         {
             llmBrain.Init();
             llmBrain.SetEnemyPersonality(enemy.Data.MonsterName, enemy.Data.PrimaryType, enemy.Data.Personality);
-            llmBrain.EventAIActionDecided += OnAIActionDecided;
-            llmBrain.EventIntentDecided += OnIntentDecided;
             llmBrain.EventChatResponseReceived += OnChatResponseReceived;
         }
 
-        ui.Init();
-        ui.OnFightSelected += HandleFightSelected;
-        ui.OnTalkSelected += HandleTalkSelected;
-        ui.OnSwitchSelected += HandleSwitchSelected;
-        ui.OnCatchSelected += HandleCatchSelected;
-        ui.OnMoveSelected += HandleMoveSelected;
-        ui.OnPartyMemberSelected += HandlePartyMemberSelected;
-        ui.OnChatSubmitted += HandleChatSubmitted;
-        ui.OnBackToActions += HandleBackToActions;
-
+        aiController.Bind();
+        BindUI();
         StartCoroutine(SetupBattle());
     }
-    #endregion
 
-    #region Private Functions
+    private void UpdateEnemyCatchRateUI()
+    {
+        float probability = CatchCalculator.GetCatchProbability(session.EnemyMonster, session.AccumulatedCatchBonus);
+        ui.EnemyHUD.UpdateCatchRate(probability);
+    }
+
+    // ── Setup & Action Phase ──
+
     private IEnumerator SetupBattle()
     {
-        state = BattleState.Start;
+        session.State = BattleState.Start;
 
-        playerUnit.Setup(playerParty[currentMonsterIndex]);
-        enemyUnit.Setup(enemyMonster);
+        playerUnit.Setup(session.PlayerMonster);
+        enemyUnit.Setup(session.EnemyMonster);
 
-        ui.PlayerHUD.SetData(playerParty[currentMonsterIndex]);
-        ui.EnemyHUD.SetData(enemyMonster);
+        ui.PlayerHUD.SetData(session.PlayerMonster);
+        ui.EnemyHUD.SetData(session.EnemyMonster);
+        UpdateEnemyCatchRateUI();
 
-        yield return ui.DialogBox.TypeDialog($"野生的 {enemyMonster.Data.MonsterName} 出现了！");
+        yield return ui.DialogBox.TypeDialog($"A wild {session.EnemyMonster.Data.MonsterName} appeared!");
         yield return new WaitForSeconds(1f);
-        yield return ui.DialogBox.TypeDialog($"去吧，{PlayerMonster.Data.MonsterName}！");
+        yield return ui.DialogBox.TypeDialog($"Go, {session.PlayerMonster.Data.MonsterName}!");
         yield return new WaitForSeconds(1f);
 
         PlayerActionPhase();
@@ -81,34 +80,38 @@ public class BattleSystem : MonoBehaviour
 
     private void PlayerActionPhase()
     {
-        state = BattleState.PlayerAction;
-        hasChatThisTurn = false;
-        chatMessageThisTurn = null;
-        ui.DialogBox.SetDialog("选择一个行动：");
+        session.TurnNumber++;
+        session.State = BattleState.PlayerAction;
+        session.ResetTurnChat();
+        UpdateEnemyCatchRateUI();
+        ui.DialogBox.SetDialog("Choose an action:");
         ui.ShowActionPanel();
-        FetchEnemyIntent();
+        aiController.FetchEnemyIntent();
     }
 
     private void ResumeActionPhase()
     {
-        state = BattleState.PlayerAction;
-        ui.DialogBox.SetDialog("选择一个行动：");
+        session.State = BattleState.PlayerAction;
+        UpdateEnemyCatchRateUI();
+        ui.DialogBox.SetDialog("Choose an action:");
         ui.ShowActionPanel();
-        FetchEnemyIntent();
+        aiController.FetchEnemyIntent();
     }
+
+    // ── UI Event Handlers ──
 
     private void HandleFightSelected()
     {
-        if (state != BattleState.PlayerAction) return;
-        ui.ShowMovePanel(PlayerMonster.Moves);
+        if (session.State != BattleState.PlayerAction) return;
+        ui.ShowMovePanel(session.PlayerMonster.Moves);
     }
 
     private void HandleTalkSelected()
     {
-        if (state != BattleState.PlayerAction) return;
-        if (hasChatThisTurn)
+        if (session.State != BattleState.PlayerAction) return;
+        if (session.HasChatThisTurn)
         {
-            ui.DialogBox.SetDialog("这回合已经聊过了！");
+            ui.DialogBox.SetDialog("Already talked this turn!");
             return;
         }
         ui.ShowChatPanel();
@@ -116,25 +119,25 @@ public class BattleSystem : MonoBehaviour
 
     private void HandleSwitchSelected()
     {
-        if (state != BattleState.PlayerAction) return;
-        ui.ShowPartyPanel(playerParty, currentMonsterIndex);
+        if (session.State != BattleState.PlayerAction) return;
+        ui.ShowPartyPanel(session.PlayerParty, session.CurrentMonsterIndex);
     }
 
     private void HandleCatchSelected()
     {
-        if (state != BattleState.PlayerAction) return;
-        state = BattleState.PlayerCatch;
+        if (session.State != BattleState.PlayerAction) return;
+        session.State = BattleState.PlayerCatch;
         ui.ClearEnemyIntent();
         StartCoroutine(PlayerCatchCoroutine());
     }
 
     private void HandleMoveSelected(int moveIndex)
     {
-        if (state != BattleState.PlayerAction) return;
-        MoveSlot slot = PlayerMonster.Moves[moveIndex];
+        if (session.State != BattleState.PlayerAction) return;
+        MoveSlot slot = session.PlayerMonster.Moves[moveIndex];
         if (slot == null || !slot.HasPP) return;
 
-        state = BattleState.PlayerMove;
+        session.State = BattleState.PlayerMove;
         ui.HideAllPanels();
         ui.ClearEnemyIntent();
         StartCoroutine(ExecuteTurn(moveIndex));
@@ -142,328 +145,201 @@ public class BattleSystem : MonoBehaviour
 
     private void HandlePartyMemberSelected(int partyIndex)
     {
-        if (state != BattleState.PlayerAction) return;
-        if (partyIndex == currentMonsterIndex || playerParty[partyIndex].IsFainted) return;
+        if (session.State != BattleState.PlayerAction) return;
+        if (partyIndex == session.CurrentMonsterIndex || session.PlayerParty[partyIndex].IsFainted) return;
 
-        state = BattleState.PlayerSwitch;
+        session.State = BattleState.PlayerSwitch;
         ui.HideAllPanels();
         ui.ClearEnemyIntent();
         StartCoroutine(SwitchMonsterCoroutine(partyIndex, true));
     }
 
-    private void HandleChatSubmitted(string message)
+    private void HandleChatSubmitted(string parsedMessage, string rawMessage)
     {
-        if (state != BattleState.PlayerAction) return;
-        state = BattleState.PlayerChat;
-        hasChatThisTurn = true;
-        chatMessageThisTurn = message;
+        if (session.State != BattleState.PlayerAction) return;
+        session.State = BattleState.PlayerChat;
+        session.HasChatThisTurn = true;
+        session.ChatMessageThisTurn = parsedMessage; // Logic uses parsed message
         ui.HideAllPanels();
         ui.ClearEnemyIntent();
-        StartCoroutine(ChatCoroutine(message));
+        StartCoroutine(ChatCoroutine(parsedMessage, rawMessage));
     }
 
     private void HandleBackToActions()
     {
-        if (state != BattleState.PlayerAction) return;
+        if (session.State != BattleState.PlayerAction) return;
         PlayerActionPhase();
+    }
+
+    private void HandleRestartSelected()
+    {
+        if (session.State != BattleState.BattleOver) return;
+        UnityEngine.SceneManagement.SceneManager.LoadScene(UnityEngine.SceneManagement.SceneManager.GetActiveScene().name);
     }
 
     // ── Turn Execution ──
 
     private IEnumerator ExecuteTurn(int playerMoveIndex)
     {
-        MoveSlot playerMove = PlayerMonster.Moves[playerMoveIndex];
+        MoveSlot playerMove = session.PlayerMonster.Moves[playerMoveIndex];
 
-        while (!intentReady) yield return null;
+        while (!session.IntentReady) yield return null;
 
-        int enemyMoveIdx = ClampMoveIndex(enemyMonster, intentMoveIndex);
-        MoveSlot enemyMove = enemyMonster.Moves[enemyMoveIdx];
+        int enemyMoveIdx = BattleRules.ClampMoveIndex(session.EnemyMonster, session.IntentMoveIndex);
+        MoveSlot enemyMove = session.EnemyMonster.Moves[enemyMoveIdx];
 
-        // Determine order
-        bool playerFirst = ShouldPlayerGoFirst(playerMove.Data, enemyMove?.Data);
+        bool playerFirst = BattleRules.ShouldPlayerGoFirst(
+            playerMove.Data, enemyMove?.Data, session.PlayerMonster, session.EnemyMonster);
 
         if (playerFirst)
         {
-            yield return PerformMove(PlayerMonster, enemyMonster, playerMove, ui.EnemyHUD, true);
+            int prevHp = session.EnemyMonster.CurrentHp;
+            yield return moveExecutor.PerformMove(session.PlayerMonster, session.EnemyMonster, playerMove, ui.EnemyHUD, true);
+            LogMoveUsed(session.PlayerMonster, session.EnemyMonster, playerMove, prevHp);
+            yield return ApplyMoveCatchBonus();
             if (CheckBattleEnd()) yield break;
-            yield return PerformMove(enemyMonster, PlayerMonster, enemyMove, ui.PlayerHUD, false);
+
+            prevHp = session.PlayerMonster.CurrentHp;
+            yield return moveExecutor.PerformMove(session.EnemyMonster, session.PlayerMonster, enemyMove, ui.PlayerHUD, false);
+            LogMoveUsed(session.EnemyMonster, session.PlayerMonster, enemyMove, prevHp);
+            yield return ApplyMoveCatchBonus();
             if (CheckBattleEnd()) yield break;
         }
         else
         {
-            yield return PerformMove(enemyMonster, PlayerMonster, enemyMove, ui.PlayerHUD, false);
+            int prevHp = session.PlayerMonster.CurrentHp;
+            yield return moveExecutor.PerformMove(session.EnemyMonster, session.PlayerMonster, enemyMove, ui.PlayerHUD, false);
+            LogMoveUsed(session.EnemyMonster, session.PlayerMonster, enemyMove, prevHp);
+            yield return ApplyMoveCatchBonus();
             if (CheckBattleEnd()) yield break;
-            yield return PerformMove(PlayerMonster, enemyMonster, playerMove, ui.EnemyHUD, true);
+
+            prevHp = session.EnemyMonster.CurrentHp;
+            yield return moveExecutor.PerformMove(session.PlayerMonster, session.EnemyMonster, playerMove, ui.EnemyHUD, true);
+            LogMoveUsed(session.PlayerMonster, session.EnemyMonster, playerMove, prevHp);
+            yield return ApplyMoveCatchBonus();
             if (CheckBattleEnd()) yield break;
         }
 
-        yield return ProcessStatusEffects(PlayerMonster, ui.PlayerHUD);
+        yield return moveExecutor.ProcessStatusEffects(session.PlayerMonster, ui.PlayerHUD);
         if (CheckBattleEnd()) yield break;
-        yield return ProcessStatusEffects(enemyMonster, ui.EnemyHUD);
+        yield return moveExecutor.ProcessStatusEffects(session.EnemyMonster, ui.EnemyHUD);
         if (CheckBattleEnd()) yield break;
 
         PlayerActionPhase();
     }
 
-    private IEnumerator PerformMove(Monster attacker, Monster defender, MoveSlot move, BattleHUD defenderHUD, bool isPlayer)
+    // ── Chat ──
+
+    private IEnumerator ChatCoroutine(string parsedMessage, string rawMessage)
     {
-        if (attacker.IsFainted || move == null) yield break;
+        // Display uses the raw message
+        ui.DialogBox.SetDialog($"You said to {session.EnemyMonster.Data.MonsterName}: '{rawMessage}'");
+        yield return new WaitForSeconds(1.5f);
 
-        // Paralysis check
-        if (attacker.Status == StatusCondition.Paralysis && UnityEngine.Random.value < 0.25f)
-        {
-            yield return ui.DialogBox.TypeDialog($"{attacker.Data.MonsterName} 因麻痹而无法行动！");
-            yield return new WaitForSeconds(1f);
-            yield break;
-        }
-
-        // Sleep check
-        if (attacker.Status == StatusCondition.Sleep)
-        {
-            attacker.IncrementStatusTurns();
-            if (attacker.StatusTurns < 3 && UnityEngine.Random.value > 0.33f)
-            {
-                yield return ui.DialogBox.TypeDialog($"{attacker.Data.MonsterName} 正在睡觉...");
-                yield return new WaitForSeconds(1f);
-                yield break;
-            }
-            attacker.CureStatus();
-            yield return ui.DialogBox.TypeDialog($"{attacker.Data.MonsterName} 醒来了！");
-            yield return new WaitForSeconds(0.5f);
-        }
-
-        // Freeze check
-        if (attacker.Status == StatusCondition.Freeze)
-        {
-            if (UnityEngine.Random.value > 0.2f)
-            {
-                yield return ui.DialogBox.TypeDialog($"{attacker.Data.MonsterName} 被冰冻住了！");
-                yield return new WaitForSeconds(1f);
-                yield break;
-            }
-            attacker.CureStatus();
-            yield return ui.DialogBox.TypeDialog($"{attacker.Data.MonsterName} 解冻了！");
-            yield return new WaitForSeconds(0.5f);
-        }
-
-        move.UsePP();
-        yield return ui.DialogBox.TypeDialog($"{attacker.Data.MonsterName} 使用了 {move.Data.MoveName}！");
-        yield return new WaitForSeconds(0.5f);
-
-        // Accuracy check
-        if (!DamageCalculator.AccuracyCheck(move.Data))
-        {
-            yield return ui.DialogBox.TypeDialog("但是没有命中！");
-            yield return new WaitForSeconds(1f);
-            yield break;
-        }
-
-        // Status moves
-        if (move.Data.Category == MoveCategory.Status)
-        {
-            yield return ApplyMoveEffects(attacker, defender, move.Data, defenderHUD, isPlayer);
-            yield break;
-        }
-
-        // Damage
-        DamageResult result = DamageCalculator.Calculate(attacker, defender, move.Data, typeChart);
-        defender.TakeDamage(result.damage);
-        yield return defenderHUD.AnimateHP(defender.CurrentHp);
-
-        if (result.isCritical)
-        {
-            yield return ui.DialogBox.TypeDialog("击中了要害！");
-            yield return new WaitForSeconds(0.5f);
-        }
-
-        if (result.effectiveness > 1.5f)
-        {
-            yield return ui.DialogBox.TypeDialog("效果拔群！");
-            yield return new WaitForSeconds(0.5f);
-        }
-        else if (result.effectiveness > 0f && result.effectiveness < 0.75f)
-        {
-            yield return ui.DialogBox.TypeDialog("效果不太好...");
-            yield return new WaitForSeconds(0.5f);
-        }
-        else if (result.effectiveness == 0f)
-        {
-            yield return ui.DialogBox.TypeDialog("完全没有效果...");
-            yield return new WaitForSeconds(0.5f);
-        }
-
-        // Secondary status effect
-        if (move.Data.StatusEffect != StatusCondition.None && move.Data.StatusChance > 0)
-        {
-            if (UnityEngine.Random.Range(0, 100) < move.Data.StatusChance)
-            {
-                yield return ApplyMoveEffects(attacker, defender, move.Data, defenderHUD, isPlayer);
-            }
-        }
-
-        // Stat stage changes from damaging moves
-        if (move.Data.StatStageChanges != null && move.Data.StatStageChanges.Length > 0)
-        {
-            yield return ApplyStatChanges(attacker, defender, move.Data, isPlayer);
-        }
-
-        if (defender.IsFainted)
-        {
-            yield return ui.DialogBox.TypeDialog($"{defender.Data.MonsterName} 倒下了！");
-            yield return new WaitForSeconds(1f);
-        }
-    }
-
-    private IEnumerator ApplyMoveEffects(Monster attacker, Monster defender, MoveData move, BattleHUD defenderHUD, bool isPlayer)
-    {
-        if (move.StatusEffect != StatusCondition.None && defender.Status == StatusCondition.None)
-        {
-            Monster target = move.TargetsUser ? attacker : defender;
-            target.ApplyStatus(move.StatusEffect);
-            BattleHUD targetHUD = move.TargetsUser == isPlayer ? ui.PlayerHUD : ui.EnemyHUD;
-            targetHUD.UpdateStatus(target.Status);
-
-            string statusName = GetStatusName(move.StatusEffect);
-            yield return ui.DialogBox.TypeDialog($"{target.Data.MonsterName} {statusName}了！");
-            yield return new WaitForSeconds(1f);
-        }
-
-        if (move.StatStageChanges != null)
-        {
-            yield return ApplyStatChanges(attacker, defender, move, isPlayer);
-        }
-    }
-
-    private IEnumerator ApplyStatChanges(Monster attacker, Monster defender, MoveData move, bool isPlayer)
-    {
-        foreach (var change in move.StatStageChanges)
-        {
-            Monster target = move.TargetsUser ? attacker : defender;
-            int actual = target.ApplyStatStageChange(change.stat, change.stages);
-            if (actual != 0)
-            {
-                string direction = actual > 0 ? "提升" : "降低";
-                string amount = Mathf.Abs(actual) > 1 ? "大幅" : "";
-                yield return ui.DialogBox.TypeDialog($"{target.Data.MonsterName} 的{GetStatName(change.stat)}{amount}{direction}了！");
-                yield return new WaitForSeconds(0.5f);
-            }
-            else
-            {
-                string limit = change.stages > 0 ? "已经无法再提升" : "已经无法再降低";
-                yield return ui.DialogBox.TypeDialog($"{target.Data.MonsterName} 的{GetStatName(change.stat)}{limit}了！");
-                yield return new WaitForSeconds(0.5f);
-            }
-        }
-    }
-
-    private IEnumerator ProcessStatusEffects(Monster monster, BattleHUD hud)
-    {
-        if (monster.IsFainted) yield break;
-
-        switch (monster.Status)
-        {
-            case StatusCondition.Poison:
-                int poisonDmg = Mathf.Max(1, monster.MaxHp / 8);
-                monster.TakeDamage(poisonDmg);
-                yield return hud.AnimateHP(monster.CurrentHp);
-                yield return ui.DialogBox.TypeDialog($"{monster.Data.MonsterName} 受到了中毒伤害！");
-                yield return new WaitForSeconds(0.5f);
-                break;
-
-            case StatusCondition.Burn:
-                int burnDmg = Mathf.Max(1, monster.MaxHp / 16);
-                monster.TakeDamage(burnDmg);
-                yield return hud.AnimateHP(monster.CurrentHp);
-                yield return ui.DialogBox.TypeDialog($"{monster.Data.MonsterName} 受到了灼伤伤害！");
-                yield return new WaitForSeconds(0.5f);
-                break;
-
-            case StatusCondition.Vulnerable:
-                monster.IncrementStatusTurns();
-                if (monster.StatusTurns >= 3)
-                {
-                    monster.CureStatus();
-                    hud.UpdateStatus(StatusCondition.None);
-                    yield return ui.DialogBox.TypeDialog($"{monster.Data.MonsterName} 的易伤状态消退了！");
-                    yield return new WaitForSeconds(0.5f);
-                }
-                break;
-        }
-
-        if (monster.IsFainted)
-        {
-            yield return ui.DialogBox.TypeDialog($"{monster.Data.MonsterName} 倒下了！");
-            yield return new WaitForSeconds(1f);
-        }
-    }
-
-    // ── Chat System ──
-
-    private IEnumerator ChatCoroutine(string message)
-    {
-        yield return ui.DialogBox.TypeDialog($"你对 {enemyMonster.Data.MonsterName} 说：'{message}'");
-        yield return new WaitForSeconds(0.5f);
-
-        waitingForLLM = true;
-        llmBrain.RequestChatResponse(message, enemyMonster, PlayerMonster);
-        yield return ui.DialogBox.TypeDialog($"{enemyMonster.Data.MonsterName} 正在思考...");
-        while (waitingForLLM) yield return null;
+        session.WaitingForLLM = true;
+        llmBrain.RequestChatResponse(parsedMessage, session.EnemyMonster, session.PlayerMonster,
+                                      session.ChatHistory, session.BattleLog);
+        yield return ui.DialogBox.TypeDialog($"{session.EnemyMonster.Data.MonsterName} is thinking...");
+        while (session.WaitingForLLM) yield return null;
     }
 
     private void OnChatResponseReceived(ChatBuffResult result)
     {
-        waitingForLLM = false;
+        session.WaitingForLLM = false;
         StartCoroutine(ProcessChatResult(result));
     }
 
     private IEnumerator ProcessChatResult(ChatBuffResult result)
     {
-        yield return ui.DialogBox.TypeDialog($"{enemyMonster.Data.MonsterName}：「{result.response}」");
+        session.ChatHistory.Add(new ChatExchange
+        {
+            playerMessage = session.ChatMessageThisTurn,
+            monsterResponse = result.response
+        });
+        session.LogEvent($"训练师对{session.EnemyMonster.Data.MonsterName}说: \"{session.ChatMessageThisTurn}\"");
+        session.LogEvent($"{session.EnemyMonster.Data.MonsterName}回应: \"{result.response}\"");
+
+        yield return ui.DialogBox.TypeDialog($"{session.EnemyMonster.Data.MonsterName}: \"{result.response}\"");
         yield return new WaitForSeconds(1f);
 
         if (result.stages != 0 && Enum.TryParse<StatType>(result.statType, out StatType stat))
         {
-            Monster target = result.buffTarget == "enemy" ? enemyMonster : PlayerMonster;
+            Monster target = result.buffTarget == "enemy" ? session.EnemyMonster : session.PlayerMonster;
             int actual = target.ApplyStatStageChange(stat, result.stages);
             if (actual != 0)
             {
-                string direction = actual > 0 ? "提升" : "降低";
-                string amount = Mathf.Abs(actual) > 1 ? "大幅" : "";
-                yield return ui.DialogBox.TypeDialog($"{target.Data.MonsterName} 的{GetStatName(stat)}{amount}{direction}了！");
+                string direction = actual > 0 ? "rose" : "fell";
+                string amount = Mathf.Abs(actual) > 1 ? "sharply " : "";
+                session.LogEvent($"{target.Data.MonsterName}的{BattleRules.GetStatName(stat)}{(actual > 0 ? "上升" : "下降")}了");
+                yield return ui.DialogBox.TypeDialog(
+                    $"{target.Data.MonsterName}'s {BattleRules.GetStatName(stat)} {amount}{direction}!");
                 yield return new WaitForSeconds(0.5f);
             }
         }
 
+        if (result.catchRateModifier != 0f)
+        {
+            session.AccumulatedCatchBonus += result.catchRateModifier;
+            UpdateEnemyCatchRateUI();
+            session.LogEvent(result.catchRateModifier > 0f
+                ? $"{session.EnemyMonster.Data.MonsterName}变得更友好了"
+                : $"{session.EnemyMonster.Data.MonsterName}变得更警惕了");
+            string msg = result.catchRateModifier > 0f
+                ? $"{session.EnemyMonster.Data.MonsterName} seems more friendly!"
+                : $"{session.EnemyMonster.Data.MonsterName} became more wary!";
+            yield return ui.DialogBox.TypeDialog(msg);
+            yield return new WaitForSeconds(0.5f);
+        }
+
         ResumeActionPhase();
+    }
+
+    private IEnumerator ApplyMoveCatchBonus()
+    {
+        float mod = moveExecutor.LastCatchRateModifier;
+        Debug.LogWarning($"[CatchBonus] move modifier: {mod}, accumulated: {session.AccumulatedCatchBonus}");
+        if (mod == 0f) yield break;
+
+        session.AccumulatedCatchBonus += mod;
+        UpdateEnemyCatchRateUI();
+        string msg = mod > 0f
+            ? $"{session.EnemyMonster.Data.MonsterName} seems more friendly!"
+            : $"{session.EnemyMonster.Data.MonsterName} became more wary!";
+        yield return ui.DialogBox.TypeDialog(msg);
+        yield return new WaitForSeconds(0.5f);
     }
 
     // ── Switch ──
 
     private IEnumerator SwitchMonsterCoroutine(int newIndex, bool enemyGetsFreeTurn)
     {
-        PlayerMonster.ResetStatStages();
-        currentMonsterIndex = newIndex;
-        playerUnit.Setup(PlayerMonster);
-        ui.PlayerHUD.SetData(PlayerMonster);
+        session.LogEvent($"训练师收回了{session.PlayerMonster.Data.MonsterName}，派出了{session.PlayerParty[newIndex].Data.MonsterName}");
+        session.PlayerMonster.ResetStatStages();
+        session.CurrentMonsterIndex = newIndex;
+        playerUnit.Setup(session.PlayerMonster);
+        ui.PlayerHUD.SetData(session.PlayerMonster);
 
-        yield return ui.DialogBox.TypeDialog($"去吧，{PlayerMonster.Data.MonsterName}！");
+        yield return ui.DialogBox.TypeDialog($"Go, {session.PlayerMonster.Data.MonsterName}!");
         yield return new WaitForSeconds(1f);
 
         if (enemyGetsFreeTurn)
         {
-            waitingForLLM = true;
-            pendingEnemyMoveIndex = 0;
-            RequestAIMove();
-            while (waitingForLLM) yield return null;
+            session.WaitingForLLM = true;
+            session.PendingEnemyMoveIndex = 0;
+            aiController.RequestAIMove();
+            while (session.WaitingForLLM) yield return null;
 
-            int idx = ClampMoveIndex(enemyMonster, pendingEnemyMoveIndex);
-            MoveSlot enemyMove = enemyMonster.Moves[idx];
-            yield return PerformMove(enemyMonster, PlayerMonster, enemyMove, ui.PlayerHUD, false);
+            int idx = BattleRules.ClampMoveIndex(session.EnemyMonster, session.PendingEnemyMoveIndex);
+            MoveSlot enemyMove = session.EnemyMonster.Moves[idx];
+            int prevHp = session.PlayerMonster.CurrentHp;
+            yield return moveExecutor.PerformMove(session.EnemyMonster, session.PlayerMonster, enemyMove, ui.PlayerHUD, false);
+            LogMoveUsed(session.EnemyMonster, session.PlayerMonster, enemyMove, prevHp);
+            yield return ApplyMoveCatchBonus();
             if (CheckBattleEnd()) yield break;
 
-            yield return ProcessStatusEffects(PlayerMonster, ui.PlayerHUD);
+            yield return moveExecutor.ProcessStatusEffects(session.PlayerMonster, ui.PlayerHUD);
             if (CheckBattleEnd()) yield break;
-            yield return ProcessStatusEffects(enemyMonster, ui.EnemyHUD);
+            yield return moveExecutor.ProcessStatusEffects(session.EnemyMonster, ui.EnemyHUD);
             if (CheckBattleEnd()) yield break;
         }
 
@@ -474,10 +350,11 @@ public class BattleSystem : MonoBehaviour
 
     private IEnumerator PlayerCatchCoroutine()
     {
-        yield return ui.DialogBox.TypeDialog("你投出了捕获球！");
+        session.LogEvent("训练师尝试捕获");
+        yield return ui.DialogBox.TypeDialog("You threw a catch ball!");
         yield return new WaitForSeconds(0.5f);
 
-        CatchResult result = CatchCalculator.TryCatch(enemyMonster);
+        CatchResult result = CatchCalculator.TryCatch(session.EnemyMonster, session.AccumulatedCatchBonus);
 
         for (int i = 0; i < result.shakeCount; i++)
         {
@@ -487,29 +364,37 @@ public class BattleSystem : MonoBehaviour
 
         if (result.success)
         {
-            yield return ui.DialogBox.TypeDialog($"成功捕获了 {enemyMonster.Data.MonsterName}！");
+            session.LogEvent($"成功捕获了{session.EnemyMonster.Data.MonsterName}！");
+            yield return ui.DialogBox.TypeDialog($"Successfully caught {session.EnemyMonster.Data.MonsterName}!");
             yield return new WaitForSeconds(1.5f);
-            BattleEnd(true);
+            
+            float probability = CatchCalculator.GetCatchProbability(session.EnemyMonster, session.AccumulatedCatchBonus);
+            string endMsg = $"Successfully caught {session.EnemyMonster.Data.MonsterName}!";
+            if (probability < 0.5f)
+            {
+                endMsg += $"\nYou manage to do it at {Mathf.RoundToInt(probability * 100)}% catch rate. Lucky you!";
+            }
+            BattleEnd(true, endMsg);
         }
         else
         {
-            yield return ui.DialogBox.TypeDialog($"{enemyMonster.Data.MonsterName} 挣脱了！");
+            session.LogEvent($"{session.EnemyMonster.Data.MonsterName}挣脱了！");
+            yield return ui.DialogBox.TypeDialog($"{session.EnemyMonster.Data.MonsterName} broke free!");
             yield return new WaitForSeconds(1f);
 
-            // Enemy free turn
-            waitingForLLM = true;
-            pendingEnemyMoveIndex = 0;
-            RequestAIMove();
-            while (waitingForLLM) yield return null;
+            while (!session.IntentReady) yield return null;
 
-            int idx = ClampMoveIndex(enemyMonster, pendingEnemyMoveIndex);
-            MoveSlot enemyMove = enemyMonster.Moves[idx];
-            yield return PerformMove(enemyMonster, PlayerMonster, enemyMove, ui.PlayerHUD, false);
+            int idx = BattleRules.ClampMoveIndex(session.EnemyMonster, session.IntentMoveIndex);
+            MoveSlot enemyMove = session.EnemyMonster.Moves[idx];
+            int prevHp = session.PlayerMonster.CurrentHp;
+            yield return moveExecutor.PerformMove(session.EnemyMonster, session.PlayerMonster, enemyMove, ui.PlayerHUD, false);
+            LogMoveUsed(session.EnemyMonster, session.PlayerMonster, enemyMove, prevHp);
+            yield return ApplyMoveCatchBonus();
             if (CheckBattleEnd()) yield break;
 
-            yield return ProcessStatusEffects(PlayerMonster, ui.PlayerHUD);
+            yield return moveExecutor.ProcessStatusEffects(session.PlayerMonster, ui.PlayerHUD);
             if (CheckBattleEnd()) yield break;
-            yield return ProcessStatusEffects(enemyMonster, ui.EnemyHUD);
+            yield return moveExecutor.ProcessStatusEffects(session.EnemyMonster, ui.EnemyHUD);
             if (CheckBattleEnd()) yield break;
 
             PlayerActionPhase();
@@ -520,15 +405,15 @@ public class BattleSystem : MonoBehaviour
 
     private bool CheckBattleEnd()
     {
-        if (enemyMonster.IsFainted)
+        if (session.EnemyMonster.IsFainted)
         {
             StartCoroutine(HandleEnemyFainted());
             return true;
         }
 
-        if (PlayerMonster.IsFainted)
+        if (session.PlayerMonster.IsFainted)
         {
-            int nextAlive = FindFirstAliveIndex();
+            int nextAlive = session.FindFirstAliveIndex();
             if (nextAlive < 0)
             {
                 StartCoroutine(HandleAllPlayerFainted());
@@ -543,258 +428,119 @@ public class BattleSystem : MonoBehaviour
 
     private IEnumerator HandleEnemyFainted()
     {
-        state = BattleState.BattleOver;
+        session.State = BattleState.BattleOver;
 
-        int expGain = ExpCalculator.GetExpGain(enemyMonster.Data, enemyMonster.Level);
-        yield return ui.DialogBox.TypeDialog($"{PlayerMonster.Data.MonsterName} 获得了 {expGain} 点经验值！");
+        int expGain = ExpCalculator.GetExpGain(session.EnemyMonster.Data, session.EnemyMonster.Level);
+        yield return ui.DialogBox.TypeDialog($"{session.PlayerMonster.Data.MonsterName} gained {expGain} EXP!");
         yield return new WaitForSeconds(1f);
 
-        int levelsGained = PlayerMonster.AddExp(expGain);
+        int levelsGained = session.PlayerMonster.AddExp(expGain);
         ui.PlayerHUD.UpdateExpBar();
 
         if (levelsGained > 0)
         {
             ui.PlayerHUD.RefreshLevel();
-            yield return ui.DialogBox.TypeDialog($"{PlayerMonster.Data.MonsterName} 升到了 Lv{PlayerMonster.Level}！");
+            yield return ui.DialogBox.TypeDialog($"{session.PlayerMonster.Data.MonsterName} grew to Lv{session.PlayerMonster.Level}!");
             yield return new WaitForSeconds(1f);
 
-            List<MoveData> newMoves = PlayerMonster.GetNewMovesForCurrentLevel();
+            List<MoveData> newMoves = session.PlayerMonster.GetNewMovesForCurrentLevel();
             foreach (var move in newMoves)
             {
-                bool learned = PlayerMonster.LearnMove(move);
+                bool learned = session.PlayerMonster.LearnMove(move);
                 if (learned)
                 {
-                    yield return ui.DialogBox.TypeDialog($"{PlayerMonster.Data.MonsterName} 学会了 {move.MoveName}！");
+                    yield return ui.DialogBox.TypeDialog($"{session.PlayerMonster.Data.MonsterName} learned {move.MoveName}!");
                     yield return new WaitForSeconds(1f);
                 }
                 else
                 {
-                    yield return ui.DialogBox.TypeDialog($"{PlayerMonster.Data.MonsterName} 想要学习 {move.MoveName}，但是招式已满！");
+                    yield return ui.DialogBox.TypeDialog($"{session.PlayerMonster.Data.MonsterName} wants to learn {move.MoveName}, but moves are full!");
                     yield return new WaitForSeconds(1f);
                 }
             }
         }
 
-        yield return ui.DialogBox.TypeDialog("战斗胜利！");
+        yield return ui.DialogBox.TypeDialog("You won the battle!");
         yield return new WaitForSeconds(1f);
         BattleEnd(true);
     }
 
     private IEnumerator HandlePlayerMonsterFainted(int nextAlive)
     {
-        yield return ui.DialogBox.TypeDialog($"{PlayerMonster.Data.MonsterName} 无法战斗了！");
+        yield return ui.DialogBox.TypeDialog($"{session.PlayerMonster.Data.MonsterName} is unable to battle!");
         yield return new WaitForSeconds(1f);
-        yield return ui.DialogBox.TypeDialog("请选择下一只怪兽！");
-        ui.ShowPartyPanel(playerParty, currentMonsterIndex);
+        yield return ui.DialogBox.TypeDialog("Choose the next monster!");
+        ui.ShowPartyPanel(session.PlayerParty, session.CurrentMonsterIndex);
 
-        state = BattleState.PlayerAction;
+        session.State = BattleState.PlayerAction;
     }
 
     private IEnumerator HandleAllPlayerFainted()
     {
-        state = BattleState.BattleOver;
-        yield return ui.DialogBox.TypeDialog("所有怪兽都无法战斗了...");
+        session.State = BattleState.BattleOver;
+        yield return ui.DialogBox.TypeDialog("All monsters have fainted...");
         yield return new WaitForSeconds(1f);
-        yield return ui.DialogBox.TypeDialog("战斗失败...");
+        yield return ui.DialogBox.TypeDialog("You lost the battle...");
         yield return new WaitForSeconds(1f);
         BattleEnd(false);
     }
 
-    private void BattleEnd(bool playerWon)
+    private void BattleEnd(bool playerWon, string endMessage = "")
     {
-        state = BattleState.BattleOver;
+        session.State = BattleState.BattleOver;
         ui.HideAllPanels();
         ui.ClearEnemyIntent();
 
-        if (llmBrain != null)
+        if (string.IsNullOrEmpty(endMessage))
         {
-            llmBrain.EventAIActionDecided -= OnAIActionDecided;
-            llmBrain.EventIntentDecided -= OnIntentDecided;
-            llmBrain.EventChatResponseReceived -= OnChatResponseReceived;
+            endMessage = playerWon ? "Battle Won!" : "Battle Lost...";
         }
+        ui.ShowEndPanel(playerWon, endMessage);
 
-        ui.OnFightSelected -= HandleFightSelected;
-        ui.OnTalkSelected -= HandleTalkSelected;
-        ui.OnSwitchSelected -= HandleSwitchSelected;
-        ui.OnCatchSelected -= HandleCatchSelected;
-        ui.OnMoveSelected -= HandleMoveSelected;
-        ui.OnPartyMemberSelected -= HandlePartyMemberSelected;
-        ui.OnChatSubmitted -= HandleChatSubmitted;
-        ui.OnBackToActions -= HandleBackToActions;
+        if (llmBrain != null)
+            llmBrain.EventChatResponseReceived -= OnChatResponseReceived;
+
+        aiController.Unbind();
+        UnbindUI();
 
         OnBattleOver?.Invoke(playerWon);
     }
 
-    // ── Intent ──
+    // ── Logging ──
 
-    private void FetchEnemyIntent()
+    private void LogMoveUsed(Monster attacker, Monster target, MoveSlot move, int targetPrevHp)
     {
-        intentReady = false;
-        intentMoveIndex = -1;
-        ui.UpdateEnemyIntent(null);
-
-        if (llmBrain == null)
-        {
-            OnIntentDecided(FallbackAIMove());
-            return;
-        }
-
-        BattleContext ctx = BuildBattleContext();
-        llmBrain.RequestIntent(ctx);
+        int damage = targetPrevHp - target.CurrentHp;
+        string dmgText = damage > 0 ? $"，对{target.Data.MonsterName}造成了{damage}点伤害" : "";
+        session.LogEvent($"{attacker.Data.MonsterName}使用了{move.Data.MoveName}{dmgText}");
     }
 
-    private void OnIntentDecided(int moveIndex)
-    {
-        intentMoveIndex = moveIndex;
-        intentReady = true;
+    // ── UI Binding ──
 
-        if (state != BattleState.PlayerAction) return;
-        int idx = ClampMoveIndex(enemyMonster, moveIndex);
-        MoveSlot move = enemyMonster.Moves[idx];
-        if (move != null)
-            ui.UpdateEnemyIntent(move.Data.MoveName);
+    private void BindUI()
+    {
+        ui.Init();
+        ui.OnFightSelected       += HandleFightSelected;
+        ui.OnTalkSelected        += HandleTalkSelected;
+        ui.OnSwitchSelected      += HandleSwitchSelected;
+        ui.OnCatchSelected       += HandleCatchSelected;
+        ui.OnMoveSelected        += HandleMoveSelected;
+        ui.OnPartyMemberSelected += HandlePartyMemberSelected;
+        ui.OnChatSubmitted       += HandleChatSubmitted;
+        ui.OnBackToActions       += HandleBackToActions;
+        ui.OnRestartSelected     += HandleRestartSelected;
     }
 
-    // ── AI ──
-
-    private void RequestAIMove()
+    private void UnbindUI()
     {
-        if (llmBrain == null)
-        {
-            OnAIActionDecided(FallbackAIMove());
-            return;
-        }
-
-        BattleContext ctx = BuildBattleContext();
-        llmBrain.RequestAIAction(ctx);
+        ui.OnFightSelected       -= HandleFightSelected;
+        ui.OnTalkSelected        -= HandleTalkSelected;
+        ui.OnSwitchSelected      -= HandleSwitchSelected;
+        ui.OnCatchSelected       -= HandleCatchSelected;
+        ui.OnMoveSelected        -= HandleMoveSelected;
+        ui.OnPartyMemberSelected -= HandlePartyMemberSelected;
+        ui.OnChatSubmitted       -= HandleChatSubmitted;
+        ui.OnBackToActions       -= HandleBackToActions;
+        // 注意：不在这里解绑 OnRestartSelected，因为它在 BattleEnd 之后仍需要生效
     }
-
-    private void OnAIActionDecided(int moveIndex)
-    {
-        pendingEnemyMoveIndex = moveIndex;
-        waitingForLLM = false;
-    }
-
-    private BattleContext BuildBattleContext()
-    {
-        var ctx = new BattleContext
-        {
-            playerName = PlayerMonster.Data.MonsterName,
-            playerLevel = PlayerMonster.Level,
-            playerCurrentHp = PlayerMonster.CurrentHp,
-            playerMaxHp = PlayerMonster.MaxHp,
-            playerType = PlayerMonster.Data.PrimaryType.ToString(),
-            enemyName = enemyMonster.Data.MonsterName,
-            enemyLevel = enemyMonster.Level,
-            enemyCurrentHp = enemyMonster.CurrentHp,
-            enemyMaxHp = enemyMonster.MaxHp,
-            enemyType = enemyMonster.Data.PrimaryType.ToString(),
-            enemyPersonality = enemyMonster.Data.Personality,
-            playerChatMessage = chatMessageThisTurn
-        };
-
-        var moves = enemyMonster.Moves;
-        int count = 0;
-        foreach (var m in moves) { if (m != null) count++; }
-
-        ctx.moveNames = new string[count];
-        ctx.movePowers = new int[count];
-        ctx.moveTypes = new string[count];
-        ctx.movePPs = new int[count];
-
-        int idx = 0;
-        for (int i = 0; i < moves.Length; i++)
-        {
-            if (moves[i] == null) continue;
-            ctx.moveNames[idx] = moves[i].Data.MoveName;
-            ctx.movePowers[idx] = moves[i].Data.Power;
-            ctx.moveTypes[idx] = moves[i].Data.MoveType.ToString();
-            ctx.movePPs[idx] = moves[i].CurrentPP;
-            idx++;
-        }
-
-        return ctx;
-    }
-
-    private int FallbackAIMove()
-    {
-        var moves = enemyMonster.Moves;
-        var validIndices = new List<int>();
-        for (int i = 0; i < moves.Length; i++)
-        {
-            if (moves[i] != null && moves[i].HasPP)
-                validIndices.Add(i);
-        }
-        if (validIndices.Count == 0) return 0;
-        return validIndices[UnityEngine.Random.Range(0, validIndices.Count)];
-    }
-    #endregion
-
-    #region Helper Functions
-    private Monster PlayerMonster => playerParty[currentMonsterIndex];
-
-    private int FindFirstAliveIndex()
-    {
-        for (int i = 0; i < playerParty.Length; i++)
-        {
-            if (playerParty[i] != null && !playerParty[i].IsFainted)
-                return i;
-        }
-        return -1;
-    }
-
-    private bool ShouldPlayerGoFirst(MoveData playerMove, MoveData enemyMove)
-    {
-        if (playerMove == null || enemyMove == null) return true;
-        if (playerMove.Priority != enemyMove.Priority)
-            return playerMove.Priority > enemyMove.Priority;
-
-        int playerSpeed = PlayerMonster.GetStat(StatType.Speed);
-        int enemySpeed = enemyMonster.GetStat(StatType.Speed);
-
-        if (PlayerMonster.Status == StatusCondition.Paralysis)
-            playerSpeed /= 2;
-        if (enemyMonster.Status == StatusCondition.Paralysis)
-            enemySpeed /= 2;
-
-        if (playerSpeed == enemySpeed)
-            return UnityEngine.Random.value > 0.5f;
-        return playerSpeed > enemySpeed;
-    }
-
-    private int ClampMoveIndex(Monster m, int index)
-    {
-        if (m.Moves == null) return 0;
-        if (index < 0 || index >= m.Moves.Length || m.Moves[index] == null || !m.Moves[index].HasPP)
-            return FallbackAIMove();
-        return index;
-    }
-
-    private string GetStatusName(StatusCondition condition)
-    {
-        return condition switch
-        {
-            StatusCondition.Poison => "中毒",
-            StatusCondition.Burn => "灼伤",
-            StatusCondition.Paralysis => "麻痹",
-            StatusCondition.Sleep => "睡着",
-            StatusCondition.Freeze => "冰冻",
-            StatusCondition.Vulnerable => "易伤",
-            _ => ""
-        };
-    }
-
-    private string GetStatName(StatType stat)
-    {
-        return stat switch
-        {
-            StatType.Attack => "攻击",
-            StatType.Defense => "防御",
-            StatType.SpAttack => "特攻",
-            StatType.SpDefense => "特防",
-            StatType.Speed => "速度",
-            _ => ""
-        };
-    }
-    #endregion
 }
